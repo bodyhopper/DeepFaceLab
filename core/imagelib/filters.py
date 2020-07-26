@@ -30,7 +30,7 @@ def apply_random_hsv_shift(img, mask=None, rnd_state=None):
     h, s, v = cv2.split(cv2.cvtColor(img, cv2.COLOR_BGR2HSV))
     h = ( h + rnd_state.randint(360) ) % 360
     s = np.clip ( s + rnd_state.random()-0.5, 0, 1 )
-    v = np.clip ( v + rnd_state.random()-0.5, 0, 1 )                    
+    v = np.clip ( v + rnd_state.random()/2-0.25, 0, 1 )                    
     
     result = np.clip( cv2.cvtColor(cv2.merge([h, s, v]), cv2.COLOR_HSV2BGR) , 0, 1 )
     if mask is not None:
@@ -79,8 +79,8 @@ def apply_random_bilinear_resize( img, chance, max_size_per, mask=None, rnd_stat
         rw = w - int( trg * int(w*(max_size_per/100.0)) )                        
         rh = h - int( trg * int(h*(max_size_per/100.0)) )   
              
-        result = cv2.resize (result, (rw,rh), interpolation=cv2.INTER_LINEAR )
-        result = cv2.resize (result, (w,h), interpolation=cv2.INTER_LINEAR )
+        result = cv2.resize (result, (rw,rh), cv2.INTER_LINEAR )
+        result = cv2.resize (result, (w,h), cv2.INTER_LINEAR )
         if mask is not None:
             result = img*(1-mask) + result*mask
             

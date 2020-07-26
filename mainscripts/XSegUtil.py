@@ -1,134 +1,108 @@
-import json
-import shutil
 import traceback
+import json
 from pathlib import Path
-
 import numpy as np
 
 from core import pathex
-from core.cv2ex import *
+from core.imagelib import IEPolys
 from core.interact import interact as io
-from core.leras import nn
 from DFLIMG import *
-from facelib import XSegNet
 
 
-def apply_xseg(input_path, model_path):
+def merge(input_dir):
+    input_path = Path(input_dir)
     if not input_path.exists():
-        raise ValueError(f'{input_path} not found. Please ensure it exists.')
+        raise ValueError('input_dir not found. Please ensure it exists.')
 
-    if not model_path.exists():
-        raise ValueError(f'{model_path} not found. Please ensure it exists.')
-        
-    io.log_info(f'Applying trained XSeg model to {input_path.name}/ folder.')
-
-    device_config = nn.DeviceConfig.ask_choose_device(choose_only_one=True)
-    nn.initialize(device_config)
-        
-    xseg = XSegNet(name='XSeg', 
-                    load_weights=True,
-                    weights_file_root=model_path,
-                    data_format=nn.data_format,
-                    raise_on_no_model_files=True)
-    res = xseg.get_resolution()
-              
     images_paths = pathex.get_image_paths(input_path, return_Path_class=True)
-    
+
+    images_processed = 0
     for filepath in io.progress_bar_generator(images_paths, "Processing"):
-        dflimg = DFLIMG.load(filepath)
-        if dflimg is None or not dflimg.has_data():
-            io.log_info(f'{filepath} is not a DFLIMG')
-            continue
-        
-        img = cv2_imread(filepath).astype(np.float32) / 255.0
-        h,w,c = img.shape
-        if w != res:
-            img = cv2.resize( img, (res,res), interpolation=cv2.INTER_CUBIC )        
-            if len(img.shape) == 2:
-                img = img[...,None]            
+        json_filepath = filepath.parent / (filepath.stem+'.json')
+        if json_filepath.exists():
+            dflimg = DFLIMG.load(filepath)
+            if dflimg is not None:
+                try:
+                    json_dict = json.loads(json_filepath.read_text())
+
+                    seg_ie_polys = IEPolys()
+                    total_points = 0
+                    
+                    #include polys first
+                    for shape in json_dict['shapes']:
+                        if shape['shape_type'] == 'polygon' and \
+                           shape['label'] != '0':
+                            seg_ie_poly = seg_ie_polys.add(1)
+
+                            for x,y in shape['points']:
+                                seg_ie_poly.add( int(x), int(y) )
+                                total_points += 1
+                                
+                    #exclude polys
+                    for shape in json_dict['shapes']:
+                        if shape['shape_type'] == 'polygon' and \
+                           shape['label'] == '0':
+                            seg_ie_poly = seg_ie_polys.add(0)
+
+                            for x,y in shape['points']:
+                                seg_ie_poly.add( int(x), int(y) )
+                                total_points += 1
+
+                    if total_points == 0:
+                        io.log_info(f"No points found in {json_filepath}, skipping.")
+                        continue
+
+                    dflimg.embed_and_set (filepath, seg_ie_polys=seg_ie_polys)
+
+                    json_filepath.unlink()
+
+                    images_processed += 1
+                except:
+                    io.log_err(f"err {filepath}, {traceback.format_exc()}")
+                    return
+
+    io.log_info(f"Images processed: {images_processed}")
+
+def split(input_dir ):
+    input_path = Path(input_dir)
+    if not input_path.exists():
+        raise ValueError('input_dir not found. Please ensure it exists.')
+
+    images_paths = pathex.get_image_paths(input_path, return_Path_class=True)
+
+    images_processed = 0
+    for filepath in io.progress_bar_generator(images_paths, "Processing"):
+        json_filepath = filepath.parent / (filepath.stem+'.json')
+ 
             
-        mask = xseg.extract(img)
-        mask[mask < 0.5]=0
-        mask[mask >= 0.5]=1
-        
-        dflimg.set_xseg_mask(mask)
-        dflimg.save()
-
-
-        
-def fetch_xseg(input_path):
-    if not input_path.exists():
-        raise ValueError(f'{input_path} not found. Please ensure it exists.')
-    
-    output_path = input_path.parent / (input_path.name + '_xseg')
-    output_path.mkdir(exist_ok=True, parents=True)
-    
-    io.log_info(f'Copying faces containing XSeg polygons to {output_path.name}/ folder.')
-    
-    images_paths = pathex.get_image_paths(input_path, return_Path_class=True)
-    
-    files_copied = 0
-    for filepath in io.progress_bar_generator(images_paths, "Processing"):
         dflimg = DFLIMG.load(filepath)
-        if dflimg is None or not dflimg.has_data():
-            io.log_info(f'{filepath} is not a DFLIMG')
-            continue
-        
-        ie_polys = dflimg.get_seg_ie_polys()
+        if dflimg is not None:
+            try:
+                seg_ie_polys = dflimg.get_seg_ie_polys()
+                if seg_ie_polys is not None:                    
+                    json_dict = {}
+                    json_dict['version'] = "4.2.9"
+                    json_dict['flags'] = {}
+                    json_dict['shapes'] = []
+                    json_dict['imagePath'] = filepath.name
+                    json_dict['imageData'] = None
+                    
+                    for poly_type, points_list in seg_ie_polys:
+                        shape_dict = {}
+                        shape_dict['label'] = str(poly_type)
+                        shape_dict['points'] = points_list
+                        shape_dict['group_id'] = None
+                        shape_dict['shape_type'] = 'polygon'
+                        shape_dict['flags'] = {}
+                        json_dict['shapes'].append( shape_dict )
 
-        if ie_polys.has_polys():
-            files_copied += 1
-            shutil.copy ( str(filepath), str(output_path / filepath.name) )
-    
-    io.log_info(f'Files copied: {files_copied}')
-    
-def remove_xseg(input_path):
-    if not input_path.exists():
-        raise ValueError(f'{input_path} not found. Please ensure it exists.')
-    
-    io.log_info(f'Processing folder {input_path}')
-    io.log_info('!!! WARNING : APPLIED XSEG MASKS WILL BE REMOVED FROM THE FRAMES !!!')
-    io.log_info('!!! WARNING : APPLIED XSEG MASKS WILL BE REMOVED FROM THE FRAMES !!!')
-    io.log_info('!!! WARNING : APPLIED XSEG MASKS WILL BE REMOVED FROM THE FRAMES !!!')
-    io.input_str('Press enter to continue.')
-                               
-    images_paths = pathex.get_image_paths(input_path, return_Path_class=True)
-    
-    files_processed = 0
-    for filepath in io.progress_bar_generator(images_paths, "Processing"):
-        dflimg = DFLIMG.load(filepath)
-        if dflimg is None or not dflimg.has_data():
-            io.log_info(f'{filepath} is not a DFLIMG')
-            continue
-        
-        if dflimg.has_xseg_mask():
-            dflimg.set_xseg_mask(None)
-            dflimg.save()
-            files_processed += 1
-    io.log_info(f'Files processed: {files_processed}')
-    
-def remove_xseg_labels(input_path):
-    if not input_path.exists():
-        raise ValueError(f'{input_path} not found. Please ensure it exists.')
-    
-    io.log_info(f'Processing folder {input_path}')
-    io.log_info('!!! WARNING : LABELED XSEG POLYGONS WILL BE REMOVED FROM THE FRAMES !!!')
-    io.log_info('!!! WARNING : LABELED XSEG POLYGONS WILL BE REMOVED FROM THE FRAMES !!!')
-    io.log_info('!!! WARNING : LABELED XSEG POLYGONS WILL BE REMOVED FROM THE FRAMES !!!')
-    io.input_str('Press enter to continue.')
-    
-    images_paths = pathex.get_image_paths(input_path, return_Path_class=True)
-    
-    files_processed = 0
-    for filepath in io.progress_bar_generator(images_paths, "Processing"):
-        dflimg = DFLIMG.load(filepath)
-        if dflimg is None or not dflimg.has_data():
-            io.log_info(f'{filepath} is not a DFLIMG')
-            continue
+                    json_filepath.write_text( json.dumps (json_dict,indent=4) )
 
-        if dflimg.has_seg_ie_polys():
-            dflimg.set_seg_ie_polys(None)
-            dflimg.save()            
-            files_processed += 1
-            
-    io.log_info(f'Files processed: {files_processed}')
+                    dflimg.remove_seg_ie_polys()
+                    dflimg.embed_and_set (filepath)
+                    images_processed += 1
+            except:
+                io.log_err(f"err {filepath}, {traceback.format_exc()}")
+                return
+
+    io.log_info(f"Images processed: {images_processed}")

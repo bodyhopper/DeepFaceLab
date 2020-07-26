@@ -1,5 +1,4 @@
 ﻿import math
-import multiprocessing
 import traceback
 from pathlib import Path
 
@@ -13,9 +12,8 @@ from core.interact import interact as io
 from core.joblib import MPClassFuncOnDemand, MPFunc
 from core.leras import nn
 from DFLIMG import DFLIMG
-from facelib import FaceEnhancer, FaceType, LandmarksProcessor, XSegNet
-from merger import FrameInfo, InteractiveMergerSubprocessor, MergerConfig
-
+from facelib import FaceEnhancer, FaceType, LandmarksProcessor, TernausNet, XSegNet
+from merger import FrameInfo, MergerConfig, InteractiveMergerSubprocessor
 
 def main (model_class_name=None,
           saved_models_path=None,
@@ -54,14 +52,20 @@ def main (model_class_name=None,
         predictor_func, predictor_input_shape, cfg = model.get_MergerConfig()
 
         # Preparing MP functions
-        predictor_func = MPFunc(predictor_func)
-
+        predictor_func = MPFunc(predictor_func)        
+        
         run_on_cpu = len(nn.getCurrentDeviceConfig().devices) == 0
+        fanseg_full_face_256_extract_func = MPClassFuncOnDemand(TernausNet, 'extract',
+                                                    name=f'FANSeg_{FaceType.toString(FaceType.FULL)}',
+                                                    resolution=256,
+                                                    place_model_on_cpu=True,
+                                                    run_on_cpu=run_on_cpu)
+
         xseg_256_extract_func = MPClassFuncOnDemand(XSegNet, 'extract',
                                                     name='XSeg',
                                                     resolution=256,
                                                     weights_file_root=saved_models_path,
-                                                    place_model_on_cpu=True,
+                                                    place_model_on_cpu=True,                                                    
                                                     run_on_cpu=run_on_cpu)
 
         face_enhancer_func = MPClassFuncOnDemand(FaceEnhancer, 'enhance',
@@ -72,9 +76,6 @@ def main (model_class_name=None,
 
         if not is_interactive:
             cfg.ask_settings()
-            
-        subprocess_count = io.input_int("Number of workers?", max(8, multiprocessing.cpu_count()), 
-                                        valid_range=[1, multiprocessing.cpu_count()], help_message="Specify the number of threads to process. A low value may affect performance. A high value may result in memory error. The value may not be greater than CPU cores." )
 
         input_path_image_paths = pathex.get_image_paths(input_path)
 
@@ -100,14 +101,14 @@ def main (model_class_name=None,
                 def generator():
                     for filepath in io.progress_bar_generator( pathex.get_image_paths(aligned_path), "Collecting alignments"):
                         filepath = Path(filepath)
-                        yield filepath, DFLIMG.load(filepath)
+                        yield filepath,  DFLIMG.load(filepath)
 
             alignments = {}
             multiple_faces_detected = False
 
             for filepath, dflimg in generator():
-                if dflimg is None or not dflimg.has_data():
-                    io.log_err (f"{filepath.name} is not a dfl image file")
+                if dflimg is None:
+                    io.log_err ("%s is not a dfl image file" % (filepath.name) )
                     continue
 
                 source_filename = dflimg.get_source_filename()
@@ -191,21 +192,21 @@ def main (model_class_name=None,
         else:
             if False:
                 pass
-            else:
+            else:            
                 InteractiveMergerSubprocessor (
                             is_interactive         = is_interactive,
                             merger_session_filepath = model.get_strpath_storage_for_file('merger_session.dat'),
                             predictor_func         = predictor_func,
                             predictor_input_shape  = predictor_input_shape,
                             face_enhancer_func     = face_enhancer_func,
+                            fanseg_full_face_256_extract_func = fanseg_full_face_256_extract_func,
                             xseg_256_extract_func = xseg_256_extract_func,
                             merger_config          = cfg,
                             frames                 = frames,
                             frames_root_path       = input_path,
                             output_path            = output_path,
                             output_mask_path       = output_mask_path,
-                            model_iter             = model.get_iter(),
-                            subprocess_count       = subprocess_count,
+                            model_iter             = model.get_iter()
                         ).run()
 
         model.finalize()
@@ -220,7 +221,7 @@ filesdata = []
 for filepath in io.progress_bar_generator(input_path_image_paths, "Collecting info"):
     filepath = Path(filepath)
 
-    dflimg = DFLIMG.x(filepath)
+    dflimg = DFLIMG.load(filepath)
     if dflimg is None:
         io.log_err ("%s is not a dfl image file" % (filepath.name) )
         continue

@@ -1,7 +1,6 @@
 import colorsys
 import inspect
 import json
-import multiprocessing
 import operator
 import os
 import pickle
@@ -13,11 +12,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from core import imagelib, pathex
-from core.cv2ex import *
+from core import imagelib
 from core.interact import interact as io
 from core.leras import nn
 from samplelib import SampleGeneratorBase
+from core import pathex
+from core.cv2ex import *
 
 
 class ModelBase(object):
@@ -33,7 +33,6 @@ class ModelBase(object):
                        cpu_only=False,
                        debug=False,
                        force_model_class_name=None,
-                       silent_start=False,
                        **kwargs):
         self.is_training = is_training
         self.saved_models_path = saved_models_path
@@ -62,70 +61,65 @@ class ModelBase(object):
                     saved_models_names = sorted(saved_models_names, key=operator.itemgetter(1), reverse=True )
                     saved_models_names = [ x[0] for x in saved_models_names ]
 
-
                     if len(saved_models_names) != 0:
-                        if silent_start:
-                            self.model_name = saved_models_names[0]
-                            io.log_info(f'Silent start: choosed model "{self.model_name}"')
-                        else:
-                            io.log_info ("Choose one of saved models, or enter a name to create a new model.")
-                            io.log_info ("[r] : rename")
-                            io.log_info ("[d] : delete")
-                            io.log_info ("")
-                            for i, model_name in enumerate(saved_models_names):
-                                s = f"[{i}] : {model_name} "
-                                if i == 0:
-                                    s += "- latest"
-                                io.log_info (s)
+                        io.log_info ("Choose one of saved models, or enter a name to create a new model.")
+                        io.log_info ("[r] : rename")
+                        io.log_info ("[d] : delete")
+                        io.log_info ("")
+                        for i, model_name in enumerate(saved_models_names):
+                            s = f"[{i}] : {model_name} "
+                            if i == 0:
+                                s += "- latest"
+                            io.log_info (s)
 
-                            inp = io.input_str(f"", "0", show_default_value=False )
-                            model_idx = -1
-                            try:
-                                model_idx = np.clip ( int(inp), 0, len(saved_models_names)-1 )
-                            except:
-                                pass
+                        inp = io.input_str(f"", "0", show_default_value=False )
+                        model_idx = -1
+                        try:
+                            model_idx = np.clip ( int(inp), 0, len(saved_models_names)-1 )
+                        except:
+                            pass
 
-                            if model_idx == -1:
-                                if len(inp) == 1:
-                                    is_rename = inp[0] == 'r'
-                                    is_delete = inp[0] == 'd'
+                        if model_idx == -1:
+                            if len(inp) == 1:
+                                is_rename = inp[0] == 'r'
+                                is_delete = inp[0] == 'd'
 
-                                    if is_rename or is_delete:
-                                        if len(saved_models_names) != 0:
+                                if is_rename or is_delete:
+                                    if len(saved_models_names) != 0:
+
+                                        if is_rename:
+                                            name = io.input_str(f"Enter the name of the model you want to rename")
+                                        elif is_delete:
+                                            name = io.input_str(f"Enter the name of the model you want to delete")
+
+                                        if name in saved_models_names:
 
                                             if is_rename:
-                                                name = io.input_str(f"Enter the name of the model you want to rename")
-                                            elif is_delete:
-                                                name = io.input_str(f"Enter the name of the model you want to delete")
+                                                new_model_name = io.input_str(f"Enter new name of the model")
 
-                                            if name in saved_models_names:
+                                            for filepath in pathex.get_paths(saved_models_path):
+                                                filepath_name = filepath.name
 
-                                                if is_rename:
-                                                    new_model_name = io.input_str(f"Enter new name of the model")
+                                                model_filename, remain_filename = filepath_name.split('_', 1)
+                                                if model_filename == name:
 
-                                                for filepath in pathex.get_paths(saved_models_path):
-                                                    filepath_name = filepath.name
+                                                    if is_rename:
+                                                        new_filepath = filepath.parent / ( new_model_name + '_' + remain_filename )
+                                                        filepath.rename (new_filepath)
+                                                    elif is_delete:
+                                                        filepath.unlink()
+                                    continue
 
-                                                    model_filename, remain_filename = filepath_name.split('_', 1)
-                                                    if model_filename == name:
-
-                                                        if is_rename:
-                                                            new_filepath = filepath.parent / ( new_model_name + '_' + remain_filename )
-                                                            filepath.rename (new_filepath)
-                                                        elif is_delete:
-                                                            filepath.unlink()
-                                        continue
-
-                                self.model_name = inp
-                            else:
-                                self.model_name = saved_models_names[model_idx]
+                            self.model_name = inp
+                        else:
+                            self.model_name = saved_models_names[model_idx]
 
                     else:
                         self.model_name = io.input_str(f"No saved models found. Enter a name of a new model", "new")
                         self.model_name = self.model_name.replace('_', ' ')
                     break
 
-
+        
             self.model_name = self.model_name + '_' + self.model_class_name
         else:
             self.model_name = force_model_class_name
@@ -151,12 +145,8 @@ class ModelBase(object):
         if self.is_first_run():
             io.log_info ("\nModel first run.")
 
-        if silent_start:
-            self.device_config = nn.DeviceConfig.BestGPU()
-            io.log_info (f"Silent start: choosed device {'CPU' if self.device_config.cpu_only else self.device_config.devices[0].name}")
-        else:
-            self.device_config = nn.DeviceConfig.GPUIndexes( force_gpu_idxs or nn.ask_choose_device_idxs(suggest_best_multi_gpu=True)) \
-                                if not cpu_only else nn.DeviceConfig.CPU()
+        self.device_config = nn.DeviceConfig.GPUIndexes( force_gpu_idxs or nn.ask_choose_device_idxs(suggest_best_multi_gpu=True)) \
+                             if not cpu_only else nn.DeviceConfig.CPU()
 
         nn.initialize(self.device_config)
 
@@ -188,7 +178,6 @@ class ModelBase(object):
         self.on_initialize()
         self.options['batch_size'] = self.batch_size
 
-        self.preview_history_writer = None
         if self.is_training:
             self.preview_history_path = self.saved_models_path / ( f'{self.get_model_name()}_history' )
             self.autobackups_path     = self.saved_models_path / ( f'{self.get_model_name()}_autobackups' )
@@ -209,7 +198,7 @@ class ModelBase(object):
                         raise ValueError('training data generator is not subclass of SampleGeneratorBase')
 
             self.update_sample_for_preview(choose_preview_history=self.choose_preview_history)
-
+            
             if self.autobackup_hour != 0:
                 self.autobackup_start_time = time.time()
 
@@ -217,30 +206,25 @@ class ModelBase(object):
                     self.autobackups_path.mkdir(exist_ok=True)
 
         io.log_info( self.get_summary_text() )
-
+        
     def update_sample_for_preview(self, choose_preview_history=False, force_new=False):
         if self.sample_for_preview is None or choose_preview_history or force_new:
             if choose_preview_history and io.is_support_windows():
-                wnd_name = "[p] - next. [space] - switch preview type. [enter] - confirm."
-                io.log_info (f"Choose image for the preview history. {wnd_name}")
+                io.log_info ("Choose image for the preview history. [p] - next. [enter] - confirm.")
+                wnd_name = "[p] - next. [enter] - confirm."
                 io.named_window(wnd_name)
                 io.capture_keys(wnd_name)
                 choosed = False
-                preview_id_counter = 0
                 while not choosed:
                     self.sample_for_preview = self.generate_next_samples()
-                    previews = self.get_static_previews()
-
-                    io.show_image( wnd_name, ( previews[preview_id_counter % len(previews) ][1] *255).astype(np.uint8) )
+                    preview = self.get_static_preview()
+                    io.show_image( wnd_name, (preview*255).astype(np.uint8) )
 
                     while True:
                         key_events = io.get_key_events(wnd_name)
                         key, chr_key, ctrl_pressed, alt_pressed, shift_pressed = key_events[-1] if len(key_events) > 0 else (0,0,False,False,False)
                         if key == ord('\n') or key == ord('\r'):
                             choosed = True
-                            break
-                        elif key == ord(' '):
-                            preview_id_counter += 1
                             break
                         elif key == ord('p'):
                             break
@@ -255,12 +239,12 @@ class ModelBase(object):
                 self.sample_for_preview = self.generate_next_samples()
 
         try:
-            self.get_static_previews()
+            self.get_static_preview()
         except:
             self.sample_for_preview = self.generate_next_samples()
 
         self.last_sample = self.sample_for_preview
-
+                
     def load_or_def_option(self, name, def_value):
         options_val = self.options.get(name, None)
         if options_val is not None:
@@ -297,15 +281,9 @@ class ModelBase(object):
         default_random_flip = self.load_or_def_option('random_flip', True)
         self.options['random_flip'] = io.input_bool("Flip faces randomly", default_random_flip, help_message="Predicted face will look more naturally without this option, but src faceset should cover all face directions as dst faceset.")
 
-    def ask_batch_size(self, suggest_batch_size=None, range=None):
+    def ask_batch_size(self, suggest_batch_size=None):
         default_batch_size = self.load_or_def_option('batch_size', suggest_batch_size or self.batch_size)
-
-        batch_size = max(0, io.input_int("Batch_size", default_batch_size, valid_range=range, help_message="Larger batch size is better for NN's generalization, but it can cause Out of Memory error. Tune this value for your videocard manually."))
-
-        if range is not None:
-            batch_size = np.clip(batch_size, range[0], range[1])
-
-        self.options['batch_size'] = self.batch_size = batch_size
+        self.options['batch_size'] = self.batch_size = max(0, io.input_int("Batch_size", default_batch_size, help_message="Larger batch size is better for NN's generalization, but it can cause Out of Memory error. Tune this value for your videocard manually."))
 
 
     #overridable
@@ -366,13 +344,8 @@ class ModelBase(object):
     def get_previews(self):
         return self.onGetPreview ( self.last_sample )
 
-    def get_static_previews(self):
-        return self.onGetPreview (self.sample_for_preview)
-
-    def get_preview_history_writer(self):
-        if self.preview_history_writer is None:
-            self.preview_history_writer = PreviewHistoryWriter()
-        return self.preview_history_writer
+    def get_static_preview(self):
+        return self.onGetPreview (self.sample_for_preview)[0][1] #first preview, and bgr
 
     def save(self):
         Path( self.get_summary_path() ).write_text( self.get_summary_text() )
@@ -394,16 +367,16 @@ class ModelBase(object):
             if diff_hour > 0 and diff_hour % self.autobackup_hour == 0:
                 self.autobackup_start_time += self.autobackup_hour*3600
                 self.create_backup()
-
+                
     def create_backup(self):
         io.log_info ("Creating backup...", end='\r')
-
+        
         if not self.autobackups_path.exists():
             self.autobackups_path.mkdir(exist_ok=True)
-
+                        
         bckp_filename_list = [ self.get_strpath_storage_for_file(filename) for _, filename in self.get_model_filename_list() ]
         bckp_filename_list += [ str(self.get_summary_path()), str(self.model_data_path) ]
-
+        
         for i in range(24,0,-1):
             idx_str = '%.2d' % i
             next_idx_str = '%.2d' % (i+1)
@@ -429,8 +402,10 @@ class ModelBase(object):
                     name, bgr = previews[i]
                     plist += [ (bgr, idx_backup_path / ( ('preview_%s.jpg') % (name))  )  ]
 
-                if len(plist) != 0:
-                    self.get_preview_history_writer().post(plist, self.loss_history, self.iter)
+                for preview, filepath in plist:
+                    preview_lh = ModelBase.get_loss_history_preview(self.loss_history, self.iter, preview.shape[1], preview.shape[2])
+                    img = (np.concatenate ( [preview_lh, preview], axis=0 ) * 255).astype(np.uint8)
+                    cv2_imwrite (filepath, img )
 
     def debug_one_iter(self):
         images = []
@@ -442,7 +417,7 @@ class ModelBase(object):
         return imagelib.equalize_and_stack_square (images)
 
     def generate_next_samples(self):
-        sample = []
+        sample = []        
         for generator in self.generator_list:
             if generator.is_initialized():
                 sample.append ( generator.generate_next() )
@@ -450,10 +425,6 @@ class ModelBase(object):
                 sample.append ( [] )
         self.last_sample = sample
         return sample
-
-    #overridable
-    def should_save_preview_history(self):
-        return (not io.is_colab() and self.iter % 10 == 0) or (io.is_colab() and self.iter % 100 == 0)
 
     def train_one_iter(self):
 
@@ -463,7 +434,7 @@ class ModelBase(object):
 
         self.loss_history.append ( [float(loss[1]) for loss in losses] )
 
-        if self.should_save_preview_history():
+        if self.iter % 10 == 0:
             plist = []
 
             if io.is_colab():
@@ -473,16 +444,12 @@ class ModelBase(object):
                     plist += [ (bgr, self.get_strpath_storage_for_file('preview_%s.jpg' % (name) ) ) ]
 
             if self.write_preview_history:
-                previews = self.get_static_previews()
-                for i in range(len(previews)):
-                    name, bgr = previews[i]
-                    path = self.preview_history_path / name
-                    plist += [ ( bgr, str ( path / ( f'{self.iter:07d}.jpg') ) ) ]
-                    if not io.is_colab():
-                        plist += [ ( bgr, str ( path / ( '_last.jpg' ) )) ]
+                plist += [ (self.get_static_preview(), str (self.preview_history_path / ('%.6d.jpg' % (self.iter))) ) ]
 
-            if len(plist) != 0:
-                self.get_preview_history_writer().post(plist, self.loss_history, self.iter)
+            for preview, filepath in plist:
+                preview_lh = ModelBase.get_loss_history_preview(self.loss_history, self.iter, preview.shape[1], preview.shape[2])
+                img = (np.concatenate ( [preview_lh, preview], axis=0 ) * 255).astype(np.uint8)
+                cv2_imwrite (filepath, img )
 
         self.iter += 1
 
@@ -530,7 +497,7 @@ class ModelBase(object):
 
     def get_summary_path(self):
         return self.get_strpath_storage_for_file('summary.txt')
-
+        
     def get_summary_text(self):
         ###Generate text summary of model hyperparameters
         #Find the longest key name and value string. Used as column widths.
@@ -629,41 +596,3 @@ class ModelBase(object):
 
         lh_img[last_line_t:last_line_b, 0:w] += imagelib.get_text_image (  (last_line_b-last_line_t,w,c), lh_text, color=[0.8]*c )
         return lh_img
-
-class PreviewHistoryWriter():
-    def __init__(self):
-        self.sq = multiprocessing.Queue()
-        self.p = multiprocessing.Process(target=self.process, args=( self.sq, ))
-        self.p.daemon = True
-        self.p.start()
-
-    def process(self, sq):
-        while True:
-            while not sq.empty():
-                plist, loss_history, iter = sq.get()
-
-                preview_lh_cache = {}
-                for preview, filepath in plist:
-                    filepath = Path(filepath)
-                    i = (preview.shape[1], preview.shape[2])
-
-                    preview_lh = preview_lh_cache.get(i, None)
-                    if preview_lh is None:
-                        preview_lh = ModelBase.get_loss_history_preview(loss_history, iter, preview.shape[1], preview.shape[2])
-                        preview_lh_cache[i] = preview_lh
-
-                    img = (np.concatenate ( [preview_lh, preview], axis=0 ) * 255).astype(np.uint8)
-
-                    filepath.parent.mkdir(parents=True, exist_ok=True)
-                    cv2_imwrite (filepath, img )
-
-            time.sleep(0.01)
-
-    def post(self, plist, loss_history, iter):
-        self.sq.put ( (plist, loss_history, iter) )
-
-    # disable pickling
-    def __getstate__(self):
-        return dict()
-    def __setstate__(self, d):
-        self.__dict__.update(d)

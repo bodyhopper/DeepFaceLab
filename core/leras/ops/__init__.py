@@ -56,7 +56,7 @@ def tf_gradients ( loss, vars ):
     gv = [*zip(grads,vars)]
     for g,v in gv:
         if g is None:
-            raise Exception(f"Variable {v.name} is declared as trainable, but no tensors flow through it.")
+            raise Exception(f"No gradient for variable {v.name}")
     return gv
 nn.gradients = tf_gradients
 
@@ -120,55 +120,24 @@ nn.upsample2d = upsample2d
 def resize2d_bilinear(x, size=2):
     h = x.shape[nn.conv2d_spatial_axes[0]].value
     w = x.shape[nn.conv2d_spatial_axes[1]].value
-
+    
     if nn.data_format == "NCHW":
         x = tf.transpose(x, (0,2,3,1))
-
+        
     if size > 0:
         new_size = (h*size,w*size)
     else:
         new_size = (h//-size,w//-size)
 
     x = tf.image.resize(x, new_size, method=tf.image.ResizeMethod.BILINEAR)
-
+    
     if nn.data_format == "NCHW":
-        x = tf.transpose(x, (0,3,1,2))
-
-    return x
+        x = tf.transpose(x, (0,3,1,2))      
+                
+    return x        
 nn.resize2d_bilinear = resize2d_bilinear
 
-def resize2d_nearest(x, size=2):
-    if size in [-1,0,1]:
-        return x
-        
 
-    if size > 0:
-        raise Exception("")
-    else:
-        if nn.data_format == "NCHW":
-            x = x[:,:,::-size,::-size]
-        else:
-            x = x[:,::-size,::-size,:]
-    return x
-        
-    h = x.shape[nn.conv2d_spatial_axes[0]].value
-    w = x.shape[nn.conv2d_spatial_axes[1]].value
-
-    if nn.data_format == "NCHW":
-        x = tf.transpose(x, (0,2,3,1))
-
-    if size > 0:
-        new_size = (h*size,w*size)
-    else:
-        new_size = (h//-size,w//-size)
-
-    x = tf.image.resize(x, new_size, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-
-    if nn.data_format == "NCHW":
-        x = tf.transpose(x, (0,3,1,2))
-
-    return x
-nn.resize2d_nearest = resize2d_nearest
 
 def flatten(x):
     if nn.data_format == "NHWC":
@@ -268,9 +237,7 @@ def dssim(img1,img2, max_val, filter_size=11, filter_sigma=1.5, k1=0.01, k2=0.03
         img_dtype = img1.dtype
         img1 = tf.cast(img1, tf.float32)
         img2 = tf.cast(img2, tf.float32)
-    
-    filter_size = max(1, filter_size)
-    
+
     kernel = np.arange(0, filter_size, dtype=np.float32)
     kernel -= (filter_size - 1 ) / 2.0
     kernel = kernel**2
